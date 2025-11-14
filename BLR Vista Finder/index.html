@@ -1,0 +1,478 @@
+<!-- Chosen Palette: Modern Blue and Slate -->
+<!-- Application Structure Plan: The application is a single-page, real-time filtering dashboard. The core UI is split into two main sections: a filter bar and a results grid. The filter bar allows the user to select a central 'Area' in Bengaluru, a 'Category' of place, and to toggle 'Favorites Only'. The results grid displays 'place cards' that are dynamically rendered based on these filters. Google Sign-In is used for authentication, which enables the 'Favorites' feature by storing user preferences in Firestore. -->
+<!-- Visualization & Content Choices: Report Info: Goal is to find hotels, malls, arcades, etc., near a particular place, with prices and Google integration for management. -> Goal: Create an interactive list-filtering app that simulates a "nearby" search and allows user data management. -> Viz/Presentation Method: Place data is rendered as a grid of cards. Each card contains the name, category, price range ($, $$, $$$), and an average cost, fulfilling the price request. A 'star' icon on each card manages the 'favorite' state. -> Interaction: Users change dropdowns or click filter buttons. The JS re-filters the master list and re-renders the grid. Clicking the star icon (if signed in) triggers a Firestore write/delete to save/remove that place from the user's favorites. -> Justification: This design is highly intuitive and provides immediate feedback. It perfectly simulates a "nearby" search by using 'Area' as the primary filter. The Google Sign-In + Firestore favorites feature provides a clear and useful "management" function, as requested. -> Library/Method: Vanilla JS, Tailwind CSS, Firebase Authentication, and Firebase Firestore. -->
+<!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BLR VistaFinder: Your Local Hub</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.1.1/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+        body { background-color: #f1f5f9; font-family: 'Inter', sans-serif; }
+        .filter-btn { transition: all 0.2s; }
+        .filter-btn.active { background-color: #3b82f6; color: white; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .fav-btn .fa-heart { transition: color 0.2s, transform 0.2s; }
+        .fav-btn .fa-heart.active { color: #ef4444; transform: scale(1.1); }
+        .fav-btn:hover .fa-heart { transform: scale(1.2); }
+        .toggle-bg:after {
+            content: ''; position: absolute; top: 2px; left: 2px; background: white;
+            border-radius: 9999px; height: 1.25rem; width: 1.25rem;
+            transition: all 0.2s;
+        }
+        input:checked + .toggle-bg { background: #3b82f6; }
+        input:checked + .toggle-bg:after { transform: translateX(100%); }
+        .price-meter .fas { color: #e5e7eb; }
+        .price-meter .fas.active { color: #16a34a; }
+        .place-card { cursor: pointer; transition: all 0.2s ease-out; }
+        .place-card:hover { transform: translateY(-4px); box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); }
+        .modal-backdrop { background-color: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); }
+        .modal { transition: opacity 0.3s ease-in-out, transform 0.3s ease-in-out; }
+    </style>
+</head>
+<body class="text-slate-800">
+
+    <div id="app" class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+        
+        <header class="flex flex-col sm:flex-row justify-between items-center mb-8 pb-4 border-b border-slate-200 gap-4">
+             <div class="flex items-center space-x-3">
+                 <i class="fas fa-map-marker-alt text-3xl text-blue-600"></i>
+                 <div>
+                    <h1 class="text-3xl sm:text-4xl font-extrabold text-slate-900">BLR VistaFinder</h1>
+                    <p class="text-md text-slate-600 mt-1">Find your next stop in Bengaluru</p>
+                 </div>
+            </div>
+            <div id="auth-container" class="min-h-[40px]"></div>
+        </header>
+        
+        <div id="loading-view" class="text-center p-8 sm:p-12">
+             <i class="fas fa-spinner fa-spin text-5xl text-blue-500 mb-4"></i>
+             <p class="text-slate-600">Loading your hub...</p>
+        </div>
+        
+        <div id="guest-view" class="hidden text-center p-8 sm:p-12 bg-white rounded-2xl shadow-md">
+            <i class="fas fa-sign-in-alt text-5xl text-blue-500 mb-4"></i>
+            <h2 class="text-2xl font-bold mb-3">Welcome to VistaFinder</h2>
+            <p class="text-slate-600 mb-6 max-w-md mx-auto">Please sign in with Google to save and manage your favorite places.</p>
+            <button id="google-signin-btn" class="bg-blue-600 text-white font-semibold py-3 px-6 rounded-lg hover:bg-blue-700 flex items-center gap-3 mx-auto">
+                <img src="https://www.google.com/favicon.ico" class="w-5 h-5 bg-white rounded-full p-0.5" alt="Google Icon">
+                Sign In with Google
+            </button>
+        </div>
+
+        <main id="main-content" class="hidden">
+            <!-- Filter Section -->
+            <div class="bg-white p-5 rounded-2xl shadow-lg border border-slate-200 mb-8">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label for="area-select" class="block text-sm font-semibold mb-1">Select an Area</label>
+                        <select id="area-select" class="w-full rounded-md border-slate-300 shadow-sm">
+                            <option value="All">All of Bengaluru</option>
+                        </select>
+                    </div>
+                     <div>
+                        <label for="price-filter" class="block text-sm font-semibold mb-1">Select a Price Level</label>
+                         <div id="price-filter" class="flex flex-wrap gap-2">
+                             <button class="filter-btn active font-semibold px-3 py-2 rounded-lg bg-slate-100 text-sm" data-price="All">All</button>
+                             <button class="filter-btn font-semibold px-3 py-2 rounded-lg bg-slate-100 text-sm" data-price="1">$</button>
+                             <button class="filter-btn font-semibold px-3 py-2 rounded-lg bg-slate-100 text-sm" data-price="2">$$</button>
+                             <button class="filter-btn font-semibold px-3 py-2 rounded-lg bg-slate-100 text-sm" data-price="3">$$$</button>
+                             <button class="filter-btn font-semibold px-3 py-2 rounded-lg bg-slate-100 text-sm" data-price="4">$$$$</button>
+                             <button class="filter-btn font-semibold px-3 py-2 rounded-lg bg-slate-100 text-sm" data-price="5">$$$$$</button>
+                         </div>
+                    </div>
+                </div>
+                <div class="mt-6">
+                     <label class="block text-sm font-semibold mb-1">Select a Category</label>
+                     <div id="category-filter" class="flex flex-wrap gap-2">
+                         <button class="filter-btn active font-semibold px-4 py-2 rounded-lg bg-slate-100" data-category="All">All</button>
+                         <button class="filter-btn font-semibold px-4 py-2 rounded-lg bg-slate-100" data-category="Hotel">Hotels</button>
+                         <button class="filter-btn font-semibold px-4 py-2 rounded-lg bg-slate-100" data-category="Food">Food</button>
+                         <button class="filter-btn font-semibold px-4 py-2 rounded-lg bg-slate-100" data-category="Mall">Malls</button>
+                         <button class="filter-btn font-semibold px-4 py-2 rounded-lg bg-slate-100" data-category="Arcade">Arcades</button>
+                     </div>
+                </div>
+                 <div class="flex items-center justify-end mt-4">
+                    <label for="show-favorites-toggle" class="mr-3 font-semibold text-sm">Show Favorites Only</label>
+                    <div class="relative inline-block w-10 mr-2 align-middle select-none">
+                        <input type="checkbox" id="show-favorites-toggle" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer opacity-0"/>
+                        <label for="show-favorites-toggle" class="toggle-bg block overflow-hidden h-6 rounded-full bg-slate-300 cursor-pointer"></label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results Grid -->
+            <div id="results-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Place cards will be injected here -->
+            </div>
+            <div id="no-results" class="hidden text-center py-16">
+                 <i class="fas fa-map-signs text-5xl text-slate-400 mb-4"></i>
+                 <h3 class="text-xl font-bold">No Places Found</h3>
+                 <p class="text-slate-500">Try adjusting your filters or checking your favorites list.</p>
+            </div>
+        </main>
+    </div>
+    
+    <!-- Details Modal -->
+    <div id="details-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop hidden">
+        <div id="details-modal-content" class="modal bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col" onclick="event.stopPropagation()">
+            <!-- JS will inject content here -->
+        </div>
+    </div>
+    
+    <!-- Notes Modal -->
+    <div id="notes-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop hidden">
+        <div id="notes-modal-content" class="modal bg-white rounded-2xl shadow-2xl w-full max-w-md" onclick="event.stopPropagation()">
+            <!-- JS will inject content here -->
+        </div>
+    </div>
+
+    <script type="module">
+        // --- 1. PASTE YOUR FIREBASE CONFIG HERE ---
+        // Go to your Firebase project settings > General > Your apps > Web app.
+        // Copy the 'firebaseConfig' object and paste it below.
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY_HERE",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+        // ------------------------------------------
+
+        const appId = 'blr-vistafinder-notes-v1';
+
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, updateDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // --- MOCK DATABASE with description & bestMeals ---
+        const placeData = [
+            { id: 1, name: 'The Leela Palace', area: 'MG Road', category: 'Hotel', priceRange: 5, avgCost: '₹15,000/night', icon: 'fa-hotel', description: 'An epitome of luxury, The Leela Palace reflects the grandeur of the Vijayanagara empire.', bestMeals: ['Royal Thali at Jamavar', 'Truffle Risotto', 'Sunday Brunch'] },
+            { id: 2, name: 'Garuda Mall', area: 'MG Road', category: 'Mall', priceRange: 3, avgCost: 'N/A', icon: 'fa-shopping-bag', description: 'A popular, centrally located mall with a wide range of international brands, a large food court, and a multiplex cinema.', bestMeals: [] },
+            { id: 3, name: 'Amoeba', area: 'MG Road', category: 'Arcade', priceRange: 2, avgCost: '₹800 for two', icon: 'fa-gamepad', description: 'Classic bowling alley and arcade center on MG Road, perfect for a fun evening with groups.', bestMeals: [] },
+            { id: 4, name: 'Truffles', area: 'Koramangala', category: 'Food', priceRange: 2, avgCost: '₹1,200 for two', icon: 'fa-utensils', description: 'Iconic burger joint in Koramangala, famous for its hearty meals and casual, energetic vibe.', bestMeals: ['All American Cheeseburger', 'Ferrero Rocher Shake', 'Truffle-tastic Burger'] },
+            { id: 5, name: 'The Ritz-Carlton', area: 'MG Road', category: 'Hotel', priceRange: 5, avgCost: '₹20,000/night', icon: 'fa-hotel', description: 'Experience unparalleled luxury and panoramic city views. An icon of elegance with award-winning dining.', bestMeals: ['Sunday Brunch at The Market', 'Dim Sum at The Lantern', 'Cocktails at Bang'] },
+            { id: 6, name: 'Forum Mall', area: 'Koramangala', category: 'Mall', priceRange: 3, avgCost: 'N/A', icon: 'fa-shopping-bag', description: 'One of Bengaluru\'s first and most beloved malls, featuring a wide array of shops, a PVR cinema, and a vibrant food court.', bestMeals: [] },
+            { id: 7, name: 'Hotel Empire', area: 'Koramangala', category: 'Food', priceRange: 2, avgCost: '₹1,000 for two', icon: 'fa-utensils', description: 'A late-night Bengaluru institution, famous for its non-vegetarian dishes, especially after 10 PM.', bestMeals: ['Ghee Rice', 'Chicken Kebab', 'Butter Chicken'] },
+            { id: 8, name: 'PVR (Forum Mall)', area: 'Koramangala', category: 'Arcade', priceRange: 2, avgCost: '₹600 for two', icon: 'fa-gamepad', description: 'More than just a cinema, the arcade section here offers a variety of games for all ages.', bestMeals: [] },
+            { id: 9, name: 'Taj MG Road', area: 'MG Road', category: 'Hotel', priceRange: 4, avgCost: '₹12,000/night', icon: 'fa-hotel', description: 'A landmark 5-star hotel in the heart of the city, known for its excellent service and dining options.', bestMeals: ['Vietnamese at Blue Ginger', 'Classic Masala Dosa', 'Poolside Cocktails'] },
+            { id: 10, name: 'Toit', area: 'Indiranagar', category: 'Food', priceRange: 3, avgCost: '₹2,500 for two', icon: 'fa-utensils', description: 'The definitive Bengaluru microbrewery experience. A massive, bustling space with fantastic craft beers and food.', bestMeals: ['Toit Weiss (Beer)', 'Wood-fired Pizza', 'Cheesy Potato Skins'] },
+            { id: 11, 'name': '1 MG-Lido Mall', area: 'MG Road', category: 'Mall', priceRange: 4, avgCost: 'N/A', icon: 'fa-shopping-bag', description: 'A premium, upscale mall on MG Road with luxury brands, fine dining restaurants, and a trendy vibe.', bestMeals: [] },
+            { id: 12, name: 'The Black Pearl', area: 'Koramangala', category: 'Food', priceRange: 3, avgCost: '₹2,000 for two', icon: 'fa-utensils', description: 'A unique pirate-themed buffet restaurant offering a vast spread of grilled items and main courses.', bestMeals: ['Live Grill (Buffet)', 'Pirate-themed Cocktails', 'Crab Curry'] },
+            { id: 13, name: 'Hyatt Centric', area: 'Indiranagar', category: 'Hotel', priceRange: 3, avgCost: '₹9,000/night', icon: 'fa-hotel', description: 'A stylish and modern hotel located conveniently between Indiranagar and MG Road, perfect for city explorers.', bestMeals: ['Breakfast Buffet', 'Gourmet Burgers', 'Craft Cocktails'] },
+            { id: 14, name: 'Orion Mall', area: 'Rajajinagar', category: 'Mall', priceRange: 4, avgCost: 'N/A', icon: 'fa-shopping-bag', description: 'A massive, beautiful mall located by the lake in Brigade Gateway, featuring a canal, houseboats, and all major brands.', bestMeals: [] },
+            { id: 15, name: 'Vidyarthi Bhavan', area: 'Basavanagudi', category: 'Food', priceRange: 1, avgCost: '₹300 for two', icon: 'fa-utensils', description: 'A heritage restaurant open since 1943, serving one of the most iconic Masala Dosas in all of Bengaluru.', bestMeals: ['Masala Dosa (Extra Ghee)', 'Filter Coffee', 'Kesari Bath'] },
+            { id: 16, name: 'PLaY Arena', area: 'Sarjapur Road', category: 'Arcade', priceRange: 3, avgCost: '₹1,500 for two', icon: 'fa-gamepad', description: 'A sprawling adventure and sports park with activities like go-karting, laser tag, and bowling.', bestMeals: [] },
+            { id: 17, name: 'Sheraton Grand', area: 'Rajajinagar', category: 'Hotel', priceRange: 4, avgCost: '₹11,000/night', icon: 'fa-hotel', description: 'Connected to Orion Mall and the World Trade Center, this hotel is a hub of business and leisure.', bestMeals: ['Persian food at Bene', 'Buffet at Feast', 'Sky-high drinks at High Ultra'] },
+            { id: 18, name: 'CTR - Shri Sagar', area: 'Basavanagudi', category: 'Food', priceRange: 1, avgCost: '₹250 for two', icon: 'fa-utensils', description: 'Another legendary spot in Malleshwaram, famous for its incredibly crispy Benne Masala Dosa.', bestMeals: ['Benne Masala Dosa', 'Filter Coffee', 'Idli-Vada'] },
+            { id: 19, name: 'SMAAASH', area: 'Sarjapur Road', category: 'Arcade', priceRange: 3, avgCost: '₹1,800 for two', icon: 'fa-gamepad', description: 'A high-tech gaming and entertainment center with VR experiences, go-karting, and a sports bar.', bestMeals: [] },
+            { id: 20, name: 'The Oberoi', area: 'Indiranagar', category: 'Hotel', priceRange: 5, avgCost: '₹18,000/night', icon: 'fa-hotel', description: 'A tranquil sanctuary with private balconies overlooking lush gardens. Famed for its exceptional service.', bestMeals: ['Thai food at Rim Naam', 'Khao Suey', 'Sunday Brunch'] },
+            { id: 21, name: 'Phoenix Marketcity', area: 'Whitefield', category: 'Mall', priceRange: 4, avgCost: 'N/A', icon: 'fa-shopping-bag', description: 'One of the largest malls in Bengaluru, a mega-destination for shopping, dining, and entertainment.', bestMeals: [] },
+            { id: 22, name: 'Inorbit Mall', area: 'Whitefield', category: 'Mall', priceRange: 3, avgCost: 'N/A', icon: 'fa-shopping-bag', description: 'A large mall catering to the Whitefield crowd, with a variety of shops, a food court, and gaming zones.', bestMeals: [] },
+            { id: 23, name: 'The Zuri', area: 'Whitefield', category: 'Hotel', priceRange: 3, avgCost: '₹6,500/night', icon: 'fa-hotel', description: 'A chic business hotel in the heart of Bengaluru\'s IT hub, offering contemporary rooms and a spa.', bestMeals: ['Pan-Asian at Sake', 'Buffet at Karibu', 'Cocktails at Bling'] },
+            { id: 24, name: 'Windmills Craftworks', area: 'Whitefield', category: 'Food', priceRange: 4, avgCost: '₹3,000 for two', icon: 'fa-utensils', description: 'A premium jazz theatre, microbrewery, and restaurant, offering a unique, upscale experience.', bestMeals: ['Craft Beer Sampler', 'Pork Ribs', 'Hefeweizen (Beer)'] },
+            { id: 25, name: 'La Marvella', area: 'Jayanagar', category: 'Hotel', priceRange: 3, avgCost: '₹5,500/night', icon: 'fa-hotel', description: 'A premium boutique hotel in South Bengaluru, with luxurious rooms and a popular rooftop restaurant.', bestMeals: ['Rooftop Buffet', 'Kebab Platter', 'Pani Puri'] },
+            { id: 26, name: 'Jayanagar 4th Block', area: 'Jayanagar', category: 'Mall', priceRange: 2, avgCost: 'N/A', icon: 'fa-shopping-bag', description: 'Not a single mall, but a massive shopping complex and street market, perfect for traditional and modern shopping.', bestMeals: [] },
+            { id: 27, name: 'Taaza Thindi', area: 'Jayanagar', category: 'Food', priceRange: 1, avgCost: '₹200 for two', icon: 'fa-utensils', description: 'A modern, high-quality, and incredibly affordable South Indian breakfast spot. A local favorite.', bestMeals: ['Masala Dosa', 'Idli-Vada', 'Chow Chow Bath'] },
+            { id: 28, name: 'Oterra', area: 'Electronic City', category: 'Hotel', priceRange: 4, avgCost: '₹7,000/night', icon: 'fa-hotel', description: 'A 5-star business hotel in Electronic City, offering luxurious rooms and a tranquil pool area.', bestMeals: ['Sunday Brunch', 'Grills at Alloro', 'Rooftop Bar'] },
+            { id: 29, name: 'Timezone', area: 'Whitefield', category: 'Arcade', priceRange: 2, avgCost: '₹700 for two', icon: 'fa-gamepad', description: 'A fun-filled arcade with a wide variety of games, a bowling alley, and prize redemptions.', bestMeals: [] },
+            { id: 30, name: 'Mavalli Tiffin Rooms (MTR)', area: 'Basavanagudi', category: 'Food', priceRange: 1, avgCost: '₹350 for two', icon: 'fa-utensils', description: 'The original MTR, a legendary restaurant since 1924. A must-visit for a traditional, authentic Karnataka breakfast.', bestMeals: ['Rava Idli', 'Bisibelebath', 'Chandrahara (Dessert)'] },
+        ];
+
+        // --- DOM Elements ---
+        const loadingView = document.getElementById('loading-view');
+        const guestView = document.getElementById('guest-view');
+        const mainContent = document.getElementById('main-content');
+        const authContainer = document.getElementById('auth-container');
+        const areaSelect = document.getElementById('area-select');
+        const categoryFilter = document.getElementById('category-filter');
+        const priceFilter = document.getElementById('price-filter');
+        const favoritesToggle = document.getElementById('show-favorites-toggle');
+        const resultsGrid = document.getElementById('results-grid');
+        const noResults = document.getElementById('no-results');
+        const detailsModal = document.getElementById('details-modal');
+        const detailsModalContent = document.getElementById('details-modal-content');
+        const notesModal = document.getElementById('notes-modal');
+        const notesModalContent = document.getElementById('notes-modal-content');
+
+        // --- State ---
+        let currentUser = null;
+        let userFavorites = {}; // Will store { id: { name, notes } }
+        let currentFilters = { area: 'All', category: 'All', priceLevel: 'All', showFavorites: false };
+        let unsubscribeFavorites = null;
+        
+        // --- Authentication ---
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user;
+                setupUIForUser(user);
+                listenForFavorites();
+            } else {
+                currentUser = null;
+                if (unsubscribeFavorites) unsubscribeFavorites();
+                userFavorites = {};
+                setupUIForGuest();
+                renderPlaces();
+            }
+        });
+        
+        function setupUIForUser(user) {
+            loadingView.classList.add('hidden');
+            guestView.classList.add('hidden');
+            mainContent.classList.remove('hidden');
+            authContainer.innerHTML = `<div class="flex items-center gap-3"><img src="${user.photoURL}" class="w-8 h-8 rounded-full"><p class="text-sm font-medium">${user.displayName}</p><button id="sign-out-btn" class="text-sm text-red-600 hover:underline">Sign Out</button></div>`;
+            document.getElementById('sign-out-btn').addEventListener('click', () => signOut(auth));
+        }
+
+        function setupUIForGuest() {
+            loadingView.classList.add('hidden');
+            mainContent.classList.remove('hidden');
+            guestView.classList.add('hidden');
+            authContainer.innerHTML = `<button id="google-signin-btn" class="bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-blue-700 flex items-center gap-2"><img src="https://www.google.com/favicon.ico" class="w-5 h-5 bg-white rounded-full p-0.5">Sign In with Google</button>`;
+            document.getElementById('google-signin-btn').addEventListener('click', () => signInWithPopup(auth, new GoogleAuthProvider()));
+        }
+
+        // --- Firestore (Favorites) ---
+        function listenForFavorites() {
+            if (unsubscribeFavorites) unsubscribeFavorites();
+            const favsRef = collection(db, `artifacts/${appId}/users/${currentUser.uid}/favorites`);
+            unsubscribeFavorites = onSnapshot(favsRef, (snapshot) => {
+                userFavorites = {};
+                snapshot.forEach(doc => {
+                    userFavorites[doc.id] = doc.data();
+                });
+                renderPlaces();
+            });
+        }
+        
+        async function toggleFavorite(placeId, placeName) {
+            if (!currentUser) {
+                alert('Please sign in with Google to save your favorite places.');
+                return;
+            }
+            const placeIdStr = placeId.toString();
+            const favRef = doc(db, `artifacts/${appId}/users/${currentUser.uid}/favorites`, placeIdStr);
+            if (userFavorites[placeIdStr]) {
+                await deleteDoc(favRef);
+            } else {
+                await setDoc(favRef, { name: placeName, addedAt: new Date(), notes: "" });
+            }
+        }
+        
+        // --- Notes Modal ---
+        async function openNotesModal(placeId) {
+            const placeIdStr = placeId.toString();
+            const place = userFavorites[placeIdStr];
+            if (!place) return;
+
+            notesModalContent.innerHTML = `
+                <div class="flex justify-between items-center p-5 border-b border-slate-200">
+                    <h3 class="text-xl font-semibold">Notes for ${place.name}</h3>
+                    <button id="close-notes-modal-btn" class="text-slate-400 hover:text-slate-600 text-2xl">&times;</button>
+                </div>
+                <form id="notes-form" class="p-5 space-y-4">
+                    <textarea id="notes-textarea" class="w-full h-40 p-2 border rounded-md border-slate-300">${place.notes || ''}</textarea>
+                    <button type="submit" class="w-full bg-green-600 text-white font-semibold py-2 rounded-lg">Save Notes</button>
+                </form>
+            `;
+            notesModal.classList.remove('hidden');
+            document.getElementById('close-notes-modal-btn').addEventListener('click', () => notesModal.classList.add('hidden'));
+            document.getElementById('notes-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const notesText = document.getElementById('notes-textarea').value;
+                const favRef = doc(db, `artifacts/${appId}/users/${currentUser.uid}/favorites`, placeIdStr);
+                await updateDoc(favRef, { notes: notesText });
+                notesModal.classList.add('hidden');
+            });
+        }
+        
+        notesModal.addEventListener('click', (e) => {
+            if (e.target === notesModal) notesModal.classList.add('hidden');
+        });
+
+        // --- Filtering and Rendering ---
+        function initFilters() {
+            const areas = [...new Set(placeData.map(p => p.area))];
+            areas.sort().forEach(area => {
+                const option = document.createElement('option');
+                option.value = area;
+                option.textContent = area;
+                areaSelect.appendChild(option);
+            });
+        }
+        
+        function renderPriceMeter(level) {
+            let meterHtml = '';
+            for (let i = 1; i <= 5; i++) {
+                meterHtml += `<i class="fas fa-dollar-sign ${i <= level ? 'active' : ''}"></i>`;
+            }
+            return `<div class="price-meter text-sm">${meterHtml}</div>`;
+        }
+
+        function renderPlaces() {
+            const filteredPlaces = placeData.filter(place => {
+                const areaMatch = currentFilters.area === 'All' || place.area === currentFilters.area;
+                const categoryMatch = currentFilters.category === 'All' || place.category === currentFilters.category;
+                const priceMatch = currentFilters.priceLevel === 'All' || place.priceRange === parseInt(currentFilters.priceLevel);
+                const favoriteMatch = !currentFilters.showFavorites || userFavorites[place.id.toString()];
+                return areaMatch && categoryMatch && priceMatch && favoriteMatch;
+            });
+            
+            noResults.classList.toggle('hidden', filteredPlaces.length > 0);
+            resultsGrid.innerHTML = filteredPlaces.map(place => {
+                const isFavorite = !!userFavorites[place.id.toString()];
+                return `
+                    <div class="bg-white rounded-xl shadow-lg border border-slate-200 p-5 relative place-card" data-id="${place.id}">
+                        <div class="absolute top-4 right-4 flex gap-2">
+                            ${isFavorite ? `<button class="notes-btn text-lg text-slate-400 hover:text-blue-600" data-id="${place.id}">
+                                <i class="fas fa-edit"></i>
+                            </button>` : ''}
+                            ${currentUser ? `<button class="fav-btn text-2xl ${isFavorite ? 'text-red-500' : 'text-slate-300'}" data-id="${place.id}" data-name="${place.name}">
+                                <i class="fas fa-heart"></i>
+                            </button>` : ''}
+                        </div>
+                        <div class="flex items-center gap-3 mb-3">
+                            <i class="fas ${place.icon} text-xl text-blue-600"></i>
+                            <span class="font-semibold bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-xs">${place.category}</span>
+                        </div>
+                        <h3 class="font-bold text-lg text-slate-900">${place.name}</h3>
+                        <p class="text-sm text-slate-500">${place.area}</p>
+                        <div class="flex justify-between items-center mt-4 pt-4 border-t border-slate-100">
+                            <span class="font-bold text-slate-900">${place.avgCost}</span>
+                            ${renderPriceMeter(place.priceRange)}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // --- Modal Logic ---
+        function renderDetailsModal(place) {
+            let mealsHtml = '';
+            if (place.bestMeals.length > 0) {
+                mealsHtml = `
+                    <h4 class="font-bold text-lg mt-4 mb-2">Highlights & Best Meals</h4>
+                    <ol class="list-decimal list-inside space-y-1 text-slate-600">
+                        ${place.bestMeals.map(meal => `<li>${meal}</li>`).join('')}
+                    </ol>
+                `;
+            }
+            
+            const mapsQuery = encodeURIComponent(`${place.name}, ${place.area}, Bengaluru`);
+            const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${mapsQuery}`;
+
+            detailsModalContent.innerHTML = `
+                <div class="flex justify-between items-center p-5 border-b border-slate-200">
+                    <h3 class="text-2xl font-bold">${place.name}</h3>
+                    <button id="close-details-modal-btn" class="text-slate-400 hover:text-slate-600 text-2xl">&times;</button>
+                </div>
+                <div class="p-6 overflow-y-auto">
+                    <div class="flex justify-between items-center mb-4">
+                        <span class="font-semibold bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-sm">${place.category} in ${place.area}</span>
+                        ${renderPriceMeter(place.priceRange)}
+                    </div>
+                    <p class="text-slate-600 mb-4">${place.description}</p>
+                    <p class="font-bold text-lg">${place.avgCost}</p>
+                    ${mealsHtml}
+                    <div class="mt-6">
+                        <a href="${mapsUrl}" target="_blank" class="inline-flex items-center gap-2 bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-blue-700">
+                            <i class="fas fa-map-location-dot"></i>
+                            Get Directions
+                        </a>
+                    </div>
+                </div>
+            `;
+            document.getElementById('close-details-modal-btn').addEventListener('click', () => detailsModal.classList.add('hidden'));
+        }
+
+        // --- Event Listeners ---
+        areaSelect.addEventListener('change', (e) => {
+            currentFilters.area = e.target.value;
+            renderPlaces();
+        });
+        
+        categoryFilter.addEventListener('click', (e) => {
+            if (e.target.tagName === 'BUTTON') {
+                document.querySelectorAll('#category-filter .filter-btn').forEach(btn => btn.classList.remove('active'));
+                e.target.classList.add('active');
+                currentFilters.category = e.target.dataset.category;
+                renderPlaces();
+            }
+        });
+
+        priceFilter.addEventListener('click', (e) => {
+            if (e.target.tagName === 'BUTTON') {
+                document.querySelectorAll('#price-filter .filter-btn').forEach(btn => btn.classList.remove('active'));
+                e.target.classList.add('active');
+                currentFilters.priceLevel = e.target.dataset.price;
+                renderPlaces();
+            }
+        });
+
+        favoritesToggle.addEventListener('change', (e) => {
+            if (!currentUser) {
+                alert('Please sign in to view your favorites.');
+                e.target.checked = false;
+                return;
+            }
+            currentFilters.showFavorites = e.target.checked;
+            renderPlaces();
+        });
+        
+        resultsGrid.addEventListener('click', (e) => {
+            const favButton = e.target.closest('.fav-btn');
+            if (favButton) {
+                e.stopPropagation();
+                toggleFavorite(favButton.dataset.id, favButton.dataset.name);
+                return;
+            }
+            
+            const notesButton = e.target.closest('.notes-btn');
+            if (notesButton) {
+                e.stopPropagation();
+                openNotesModal(notesButton.dataset.id);
+                return;
+            }
+
+            const card = e.target.closest('.place-card');
+            if (card) {
+                const placeId = parseInt(card.dataset.id);
+                const place = placeData.find(p => p.id === placeId);
+                renderDetailsModal(place);
+                detailsModal.classList.remove('hidden');
+            }
+        });
+        
+        detailsModal.addEventListener('click', (e) => {
+            if (e.target === detailsModal) {
+                 detailsModal.classList.add('hidden');
+            }
+        });
+
+        // --- Initial Load ---
+        initFilters();
+        renderPlaces();
+        
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                // Handled by main listener
+            } else {
+                setupUIForGuest();
+                renderPlaces();
+            }
+            if (loadingView) {
+                loadingView.classList.add('hidden');
+            }
+        });
+    </script>
+</body>
+</html>
